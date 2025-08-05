@@ -122,6 +122,10 @@ public class JsonReader implements Closeable
     private final char[] _numBuf = new char[256];
     private final StringBuilder _strBuf = new StringBuilder();
 
+    /** Default maximum parsing depth */
+    static final int DEFAULT_MAX_PARSE_DEPTH = 1000;
+    private final int maxParseDepth;
+    private int curParseDepth = 0;
     static final ThreadLocal<Deque<char[]>> _snippet = new ThreadLocal<Deque<char[]>>()
     {
         public Deque<char[]> initialValue()
@@ -1074,16 +1078,31 @@ public class JsonReader implements Closeable
      * Convert the passed in JSON string into a Java object graph.
      *
      * @param json String JSON input
+     * @param maxDepth Maximum parsing depth.
      * @return Java object graph matching JSON input
      * @throws java.io.IOException If an I/O error occurs
      */
-    public static Object jsonToJava(String json) throws IOException
+    public static Object jsonToJava(String json, int maxDepth) throws IOException
     {
         ByteArrayInputStream ba = new ByteArrayInputStream(json.getBytes("UTF-8"));
-        JsonReader jr = new JsonReader(ba, false);
+        JsonReader jr = new JsonReader(ba, false, maxDepth);
         Object obj = jr.readObject();
         jr.close();
         return obj;
+    }
+
+
+     /**
+     * Convert the passed in JSON string into a Java object graph.
+     *
+     * @param json String JSON input
+     * @param optionalArgs Map of optional parameters to control parsing.  See readme file for details.
+     * @return Java object graph matching JSON input
+     * @throws IOException 
+     */
+    public static Object jsonToJava(String json) throws IOException
+    {
+        return jsonToJava(json, DEFAULT_MAX_PARSE_DEPTH);
     }
 
     /**
@@ -1102,6 +1121,27 @@ public class JsonReader implements Closeable
         throw new RuntimeException("Use com.cedarsoftware.util.JsonReader.jsonToMaps()");
     }
 
+        /**
+     * Convert the passed in JSON string into a Java object graph
+     * that consists solely of Java Maps where the keys are the
+     * fields and the values are primitives or other Maps (in the
+     * case of objects).
+     *
+     * @param json String JSON input
+     * @param maxDepth Maximum parsing depth.
+     * @return Java object graph of Maps matching JSON input,
+     *         or null if an error occurred.
+     * @throws java.io.IOException If an I/O error occurs
+     */
+    public static Map jsonToMaps(String json, int maxDepth) throws IOException
+    {
+        ByteArrayInputStream ba = new ByteArrayInputStream(json.getBytes("UTF-8"));
+        JsonReader jr = new JsonReader(ba, true, maxDepth);
+        Map map = (Map) jr.readObject();
+        jr.close();
+        return map;
+    }
+
     /**
      * Convert the passed in JSON string into a Java object graph
      * that consists solely of Java Maps where the keys are the
@@ -1115,26 +1155,29 @@ public class JsonReader implements Closeable
      */
     public static Map jsonToMaps(String json) throws IOException
     {
-        ByteArrayInputStream ba = new ByteArrayInputStream(json.getBytes("UTF-8"));
-        JsonReader jr = new JsonReader(ba, true);
-        Map map = (Map) jr.readObject();
-        jr.close();
-        return map;
+        return jsonToMaps(json, DEFAULT_MAX_PARSE_DEPTH);
     }
 
     public JsonReader()
     {
+        this(DEFAULT_MAX_PARSE_DEPTH);
+    }
+
+    public JsonReader(int maxDepth)
+    {
         _noObjects = false;
         _in = null;
+        maxParseDepth = maxDepth;
     }
 
     public JsonReader(InputStream in)
     {
-        this(in, false);
+        this(in, false, DEFAULT_MAX_PARSE_DEPTH);
     }
 
-    public JsonReader(InputStream in, boolean noObjects)
+    public JsonReader(InputStream in, boolean noObjects, int maxDepth)
     {
+        maxParseDepth = maxDepth;
         _noObjects = noObjects;
         try
         {
@@ -1144,6 +1187,11 @@ public class JsonReader implements Closeable
         {
             throw new RuntimeException("Your JVM does not support UTF-8.  Get a new JVM.", e);
         }
+    }
+
+    public JsonReader(InputStream in, boolean noObjects)
+    {
+        this(in, noObjects,DEFAULT_MAX_PARSE_DEPTH);
     }
 
     /**
@@ -2201,6 +2249,7 @@ public class JsonReader implements Closeable
                         }
                         in.unread(c);
                         state = STATE_READ_FIELD;
+                        ++curParseDepth;
                     }
                     else if (c == '[')
                     {
@@ -2259,6 +2308,7 @@ public class JsonReader implements Closeable
                     if (c == '}' || c == -1)
                     {
                         done = true;
+                        --curParseDepth;
                     }
                     else if (c == ',')
                     {
@@ -2282,6 +2332,10 @@ public class JsonReader implements Closeable
 
     private Object readValue(JsonObject object) throws IOException
     {
+        if (curParseDepth > maxParseDepth) {
+            return error("Maximum parsing depth exceeded");
+        }
+
         int c = _in.read();
 
         if (c == '"')
@@ -2337,6 +2391,7 @@ public class JsonReader implements Closeable
     private Object readArray(JsonObject object) throws IOException
     {
         Collection array = new ArrayList();
+        ++curParseDepth;
 
         while (true)
         {
@@ -2358,6 +2413,7 @@ public class JsonReader implements Closeable
             }
         }
 
+        --curParseDepth;
         return array.toArray();
     }
 
